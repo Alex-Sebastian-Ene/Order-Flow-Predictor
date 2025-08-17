@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  ml_app:
+    build: .
+    volumes:
+      - .:/app
+    ports:
+      - "8888:8888"  # Jupyter Lab
+    environment:
+      - PYTHONPATH=/app
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]  # Enable if you have NVIDIA GPU support
+    command: jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root --NotebookApp.token=''
+    
+  # Optionally add MLflow tracking server
+  # mlflow:
+  #   image: ghcr.io/mlflow/mlflow:latest
+  #   ports:
+  #     - "5000:5000"
+  #   volumes:
+  #     - ./mlruns:/mlruns
