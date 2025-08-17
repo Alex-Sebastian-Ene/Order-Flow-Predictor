@@ -1,0 +1,54 @@
+# Configuration for auto-labeling PRs based on file paths and branch names
+version: 1
+labels:
+  - label: "feature"
+    branch: "^feature/"
+    
+  - label: "bug"
+    branch: "^fix/"
+    
+  - label: "documentation"
+    files:
+      - "docs/**/*"
+      - "*.md"
+      - "**/*.md"
+    
+  - label: "dependencies"
+    files:
+      - "requirements.txt"
+      - "pyproject.toml"
+      - "Dockerfile"
+      - "docker-compose.yml"
+    
+  - label: "model"
+    files:
+      - "src/models/**/*"
+    
+  - label: "data"
+    files:
+      - "src/data/**/*"
+    
+  - label: "tests"
+    files:
+      - "tests/**/*"
+
+# Configuration for auto-assigning reviewers
+reviewers:
+  # Add your team members here
+  team:
+    - Alex-Sebastian-Ene  # Repository owner
+
+# Pull request size labels
+size:
+  xs:
+    lines: 0-9
+  s:
+    lines: 10-29
+  m:
+    lines: 30-99
+  l:
+    lines: 100-499
+  xl:
+    lines: 500-999
+  xxl:
+    lines: 1000+
