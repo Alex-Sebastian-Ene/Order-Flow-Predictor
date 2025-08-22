@@ -49,7 +49,9 @@ jobs:
       run: poetry install
 
     - name: Run Python tests
-      run: poetry run pytest tests/
+      run: |
+        export PYTHONPATH="${PYTHONPATH}:${PWD}/src/python:${PWD}/src"
+        poetry run pytest tests/
 
     - name: Check code formatting
       run: |

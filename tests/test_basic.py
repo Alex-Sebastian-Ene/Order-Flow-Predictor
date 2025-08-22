@@ -14,33 +14,61 @@ class TestBasic(unittest.TestCase):
 
     def test_imports(self) -> None:
         """Test that core modules can be imported."""
+        import sys
+        from pathlib import Path
+
+        # Get absolute path to src/python directory
+        test_dir = Path(__file__).parent.absolute()
+        project_root = test_dir.parent
+        src_python_path = project_root / "src" / "python"
+
+        # Ensure the path exists
+        if not src_python_path.exists():
+            self.fail(f"Source path does not exist: {src_python_path}")
+
+        # Add to Python path if not already there
+        src_python_str = str(src_python_path)
+        if src_python_str not in sys.path:
+            sys.path.insert(0, src_python_str)
+
+        # Test individual imports with specific error handling
         try:
-            # These imports work at runtime due to conftest.py setup
-            # Import from full paths to ensure CI compatibility
-            import sys
-            from pathlib import Path
-
-            # Add src/python to path for Python modules
-            src_python_path = Path(__file__).parent.parent / "src" / "python"
-            sys.path.insert(0, str(src_python_path))
-
             from models.base import BaseModel  # type: ignore
+
+            self.assertTrue(hasattr(BaseModel, "__init__"))
+        except ImportError as e:
+            # Debug information for CI
+            available_paths = [p for p in sys.path if "src" in p or "python" in p]
+            self.fail(
+                f"Failed to import BaseModel: {e}. "
+                f"Src path: {src_python_path} (exists: {src_python_path.exists()}). "
+                f"Python paths with 'src' or 'python': {available_paths}"
+            )
+
+        try:
             from order_flow_predictor.constants import (  # type: ignore
                 MAX_ORDER_BOOK_LEVELS,
             )
+
+            self.assertIsInstance(MAX_ORDER_BOOK_LEVELS, int)
+        except ImportError as e:
+            self.fail(f"Failed to import constants: {e}")
+
+        try:
             from order_flow_predictor.predictor import (  # type: ignore
                 OrderFlowPredictor,
             )
 
+            self.assertTrue(hasattr(OrderFlowPredictor, "__init__"))
+        except ImportError as e:
+            self.fail(f"Failed to import OrderFlowPredictor: {e}")
+
+        try:
             from utils.evaluation import calculate_metrics  # type: ignore
 
-            # Verify imports worked
-            self.assertTrue(hasattr(BaseModel, "__init__"))
-            self.assertIsInstance(MAX_ORDER_BOOK_LEVELS, int)
-            self.assertTrue(hasattr(OrderFlowPredictor, "__init__"))
             self.assertTrue(hasattr(calculate_metrics, "__call__"))
         except ImportError as e:
-            self.fail(f"Failed to import core modules: {e}")
+            self.fail(f"Failed to import calculate_metrics: {e}")
 
     def test_constants(self) -> None:
         """Test that constants are defined."""
