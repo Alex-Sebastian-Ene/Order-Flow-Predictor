@@ -3,7 +3,7 @@
 import os
 from typing import Any, Dict
 
-import yaml
+import yaml  # type: ignore
 
 
 def load_config(config_path: str) -> Dict[str, Any]:
