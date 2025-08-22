@@ -26,16 +26,21 @@ wheels/
 env/
 venv/
 ENV/
+.python-version
 
 # IDE
 .idea/
 .vscode/
 *.swp
 *.swo
+.project
+.classpath
+.settings/
 
 # Jupyter Notebook
 .ipynb_checkpoints
 *.ipynb
+jupyter_token.txt
 
 # Data
 data/
@@ -43,17 +48,83 @@ data/
 *.json
 *.pkl
 *.h5
+*.dat
 
 # Logs
 logs/
 *.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
 # Model artifacts
 models/
 *.pt
 *.pth
 *.onnx
+*.weights
+*.pb
 
 # Distribution
 dist/
 build/
+
+# Credentials and Secrets
+*.pem
+*.key
+*.crt
+*.cer
+*.p12
+*.pfx
+.env*
+credentials/
+secrets/
+*_key
+*_token
+*_secret
+*.password
+config/*_local.yml
+config/secrets.yml
+.secret*
+.netrc
+
+# C++ build
+*.o
+*.obj
+*.exe
+*.out
+*.app
+*.dll
+*.so
+*.dylib
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+build/
+Debug/
+Release/
+
+# Test coverage
+.coverage
+coverage/
+htmlcov/
+coverage.xml
+
+# Docker
+.docker/
+*.env
+
+# OS
+.DS_Store
+Thumbs.db
+._*
+.Spotlight-V100
+.Trashes
+
+# Local configuration
+local_settings.py
+instance/
+config_local.py
+*.local.yml
+*.local.yaml
+*.local.json

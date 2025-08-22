@@ -1,0 +1,65 @@
+# Model Configuration
+model:
+  name: "order_flow_predictor"
+  version: "0.1.0"
+  
+  # Black-Scholes Configuration
+  black_scholes:
+    use_polynomial_approx: true  # Use polynomial approximation for normal CDF
+    precision: "double"         # Can be "float" or "double"
+    cache_computations: true    # Cache intermediate results
+    polynomial_coefficients:    # Abramowitz and Stegun coefficients
+      a1: 0.31938153
+      a2: -0.356563782
+      a3: 1.781477937
+      a4: -1.821255978
+      a5: 1.330274429
+    
+  # Neural Network Parameters
+  ml_model:
+    architecture:
+      input_size: 5            # S, K, T, σ, r
+      hidden_layers: [32, 32]  # Two hidden layers with 32 neurons each
+      output_size: 1           # Option price
+    training:
+      batch_size: 32
+      learning_rate: 0.001
+      dropout: 0.2
+      use_quantization: true   # Enable int8 quantization
+    
+# Data Configuration
+data:
+  # Order book configuration
+  orderbook:
+    max_levels: 10
+    price_decimals: 2
+    
+  # Feature engineering
+  features:
+    time_windows: [5, 10, 20]
+    use_orderbook_imbalance: true
+    use_price_spread: true
+    use_volume_profile: true
+    
+  # Training data
+  training:
+    batch_size: 32
+    validation_split: 0.2
+    shuffle: true
+    
+# Logging Configuration
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  
+# C++ Integration
+cpp:
+  order_book:
+    max_orders: 1000000
+    cleanup_interval: 3600  # in seconds
+    
+# Directories
+paths:
+  data: "data/"
+  models: "models/"
+  logs: "logs/"
