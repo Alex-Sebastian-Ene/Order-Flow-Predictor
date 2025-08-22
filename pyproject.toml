@@ -46,7 +46,7 @@ multi_line_output = 3
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
-addopts = "-v --cov=src --cov-report=term-missing"
+addopts = "-v"
 asyncio_mode = "auto"
 
 [tool.mypy]
