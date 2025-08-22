@@ -1,53 +1,44 @@
-# Configuration for auto-labeling PRs based on file paths and branch names
-version: 1
-labels:
-  - label: "feature"
-    branch: "^feature/"
-    
-  - label: "bug"
-    branch: "^fix/"
-    
-  - label: "documentation"
-    files:
-      - "docs/**/*"
-      - "*.md"
-      - "**/*.md"
-    
-  - label: "dependencies"
-    files:
-      - "requirements.txt"
-      - "pyproject.toml"
-      - "Dockerfile"
-      - "docker-compose.yml"
-    
-  - label: "model"
-    files:
-      - "src/models/**/*"
-    
-  - label: "data"
-    files:
-      - "src/data/**/*"
-    
-  - label: "tests"
-    files:
-      - "tests/**/*"
+# Add version label to changes in version files
+version:
+  - pyproject.toml
+  - setup.cfg
+  - setup.py
 
-# Configuration for auto-assigning reviewers
-reviewers:
-  # Add your team members here
-  team:
-    - Alex-Sebastian-Ene  # Repository owner
+# Add feature label to feature branches
+feature:
+  - src/**/*
 
-# Pull request size labels
-size:
-  xs:
-    lines: 0-9
-  s:
-    lines: 10-29
-  m:
-    lines: 30-99
-  l:
-    lines: 100-499
+# Add bug label to fix branches
+bug:
+  - src/**/*
+
+# Add documentation label to docs
+documentation:
+  - docs/**/*
+  - "*.md"
+  - "**/*.md"
+
+# Add dependencies label
+dependencies:
+  - requirements.txt
+  - pyproject.toml
+  - Dockerfile
+  - docker-compose.yml
+
+# Add model label
+model:
+  - src/python/models/**/*
+  - src/python/features/**/*
+
+# Add data label
+data:
+  - src/python/data/**/*
+
+# Add tests label
+tests:
+  - tests/**/*
+  - "**/*_test.py"
+  - "**/*_tests.py"
   xl:
     lines: 500-999
   xxl:
