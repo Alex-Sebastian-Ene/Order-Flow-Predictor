@@ -26,7 +26,8 @@ class TestBasic(unittest.TestCase):
         if not src_python_path.exists():
             self.fail(f"Source path does not exist: {src_python_path}")
 
-        # Add to Python path if not already there
+        # Add to Python path if not already there (redundant with conftest.py
+        # but ensures robustness)
         src_python_str = str(src_python_path)
         if src_python_str not in sys.path:
             sys.path.insert(0, src_python_str)
@@ -37,13 +38,39 @@ class TestBasic(unittest.TestCase):
 
             self.assertTrue(hasattr(BaseModel, "__init__"))
         except ImportError as e:
-            # Debug information for CI
-            available_paths = [p for p in sys.path if "src" in p or "python" in p]
-            self.fail(
-                f"Failed to import BaseModel: {e}. "
-                f"Src path: {src_python_path} (exists: {src_python_path.exists()}). "
-                f"Python paths with 'src' or 'python': {available_paths}"
-            )
+            # Alternative import method for CI environments
+            sys.path.insert(0, str(src_python_path))
+            try:
+                from models.base import BaseModel  # type: ignore
+
+                self.assertTrue(hasattr(BaseModel, "__init__"))
+            except ImportError:
+                # Debug information for CI
+                import os
+
+                models_dir = src_python_path / "models"
+                models_base_file = models_dir / "base.py"
+                available_paths = [p for p in sys.path if "src" in p or "python" in p]
+                directory_contents = (
+                    list(os.listdir(src_python_path))
+                    if src_python_path.exists()
+                    else []
+                )
+                models_contents = (
+                    list(os.listdir(models_dir)) if models_dir.exists() else []
+                )
+
+                self.fail(
+                    f"Failed to import BaseModel: {e}. "
+                    f"Src path: {src_python_path} "
+                    f"(exists: {src_python_path.exists()}). "
+                    f"Models dir: {models_dir} (exists: {models_dir.exists()}). "
+                    f"Models base file: {models_base_file} "
+                    f"(exists: {models_base_file.exists()}). "
+                    f"Python paths with 'src' or 'python': {available_paths}. "
+                    f"src/python contents: {directory_contents}. "
+                    f"models contents: {models_contents}"
+                )
 
         try:
             from order_flow_predictor.constants import (  # type: ignore

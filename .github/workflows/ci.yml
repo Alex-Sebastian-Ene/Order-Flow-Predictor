@@ -58,9 +58,7 @@ jobs:
         poetry run black --check .
         poetry run isort --check-only .
         poetry run flake8 .
-
-    - name: Run pylint
-      run: poetry run pylint src/python/
+        poetry run mypy .
 
   docker:
     runs-on: ubuntu-latest
