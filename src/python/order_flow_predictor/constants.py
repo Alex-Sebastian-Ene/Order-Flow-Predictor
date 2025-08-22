@@ -1,16 +1,20 @@
-"""
-Constants and configuration settings.
-"""
+"""Constants for order flow prediction."""
+
+# Order book levels
+MAX_ORDER_BOOK_LEVELS = 10
+DEFAULT_TICK_SIZE = 0.01
+
+# Feature windows (in seconds)
+SHORT_WINDOW = 60
+MEDIUM_WINDOW = 300
+LONG_WINDOW = 900
 
 # Model parameters
-DEFAULT_WINDOW_SIZE = 10
-DEFAULT_PREDICTION_HORIZON = 1
+DEFAULT_BATCH_SIZE = 32
+DEFAULT_LEARNING_RATE = 0.001
+DEFAULT_EPOCHS = 100
 
-# Data preprocessing
-MIN_PRICE = 0.0
-MAX_VOLUME = 1e6
-
-# Training parameters
-BATCH_SIZE = 32
-LEARNING_RATE = 0.001
-NUM_EPOCHS = 100
+# Risk management
+MAX_POSITION_SIZE = 1000000
+DEFAULT_STOP_LOSS = 0.02
+DEFAULT_TAKE_PROFIT = 0.04

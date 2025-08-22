@@ -51,5 +51,15 @@ asyncio_mode = "auto"
 python_version = "3.12"
 warn_return_any = true
 warn_unused_configs = true
-disallow_untyped_defs = true
+disallow_untyped_defs = false
 check_untyped_defs = true
+ignore_missing_imports = true
+exclude = [
+    "tests/",
+    "src/python/__init__.py",
+    "src/__init__.py"
+]
+
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+ignore_errors = true

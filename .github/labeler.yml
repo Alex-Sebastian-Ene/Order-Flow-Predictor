@@ -39,7 +39,15 @@ tests:
   - tests/**/*
   - "**/*_test.py"
   - "**/*_tests.py"
-  xl:
-    lines: 500-999
-  xxl:
-    lines: 1000+
+
+# Add C++ label
+cpp:
+  - src/cpp/**/*
+  - "**/*.cpp"
+  - "**/*.hpp"
+  - "**/*.h"
+
+# Add Python label  
+python:
+  - src/python/**/*
+  - "**/*.py"
