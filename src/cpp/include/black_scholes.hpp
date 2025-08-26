@@ -5,6 +5,16 @@
 
 namespace order_flow {
 namespace pricing {
+using namespace types;
+
+struct CDF_precompute{
+    double p;
+    double a1; 
+    double a2; 
+    double a3; 
+    double a4; 
+    double a5;
+};
 
 /**
  * Ultra-low latency Black-Scholes pricing engine.
@@ -12,6 +22,7 @@ namespace pricing {
  */
 class BlackScholes {
 public:
+    static CDF_precompute computeCoefficents();
     /**
      * @brief Calculate normal CDF using Abramowitz and Stegun approximation
      * Should:
@@ -35,6 +46,9 @@ public:
     static PricingResult calculate(const OptionParams& params);
 
 private:
+    double approx_CDF(double x, CDF_precompute CDF);
+    void   gradient_descent(const std::vector<double>& x_values, CDF_precompute& CDF);
+    double calculate_error(const std::vector<double>& x_values, CDF_precompute CDF);
     /**
      * @brief Calculate d1, d2 parameters for Black-Scholes
      * Should:
