@@ -1,5 +1,8 @@
 #include "black_scholes.hpp"
-#include <math.h>
+#include <cmath>
+#include <vector>
+#include <limits>
+#include <cstdio>
 
 namespace order_flow{
 namespace pricing{
@@ -66,40 +69,41 @@ void BlackScholes::gradient_descent(const std::vector<double>& x_values, CDF_pre
         double grad_a1 = 0, grad_a2 = 0, grad_a3 = 0, grad_a4 = 0, grad_a5 = 0, grad_p = 0;
         const double h = 1e-5;
 
-        // Compute gradients
+        // Compute gradients with proper error linkage
         for (double x : x_values) {
             double true_cdf = reference_cdf(x);
             double approx = approx_CDF(x, CDF);
             double error = true_cdf - approx;
+            
             CDF.a1 += h;
             double approx_a1 = approx_CDF(x, CDF);
-            grad_a1 += (approx_a1 - approx) / h;
+            grad_a1 += -2.0 * error * (approx_a1 - approx) / h;
             CDF.a1 -= h;
+            
             CDF.a2 += h;
             double approx_a2 = approx_CDF(x, CDF);
-            grad_a2 += (approx_a2 - approx) / h;
+            grad_a2 += -2.0 * error * (approx_a2 - approx) / h;
             CDF.a2 -= h;
 
             CDF.a3 += h;
             double approx_a3 = approx_CDF(x, CDF);
-            grad_a3 += (approx_a3 - approx) / h;
+            grad_a3 += -2.0 * error * (approx_a3 - approx) / h;
             CDF.a3 -= h;
 
             CDF.a4 += h;
             double approx_a4 = approx_CDF(x, CDF);
-            grad_a4 += (approx_a4 - approx) / h;
+            grad_a4 += -2.0 * error * (approx_a4 - approx) / h;
             CDF.a4 -= h;
 
             CDF.a5 += h;
             double approx_a5 = approx_CDF(x, CDF);
-            grad_a5 += (approx_a5 - approx) / h;
+            grad_a5 += -2.0 * error * (approx_a5 - approx) / h;
             CDF.a5 -= h;
 
             CDF.p += h;
             double approx_p = approx_CDF(x, CDF);
-            grad_p += (approx_p - approx) / h;
+            grad_p += -2.0 * error * (approx_p - approx) / h;
             CDF.p -= h;
-
         }
         m_a1 = beta1 * m_a1 + (1 - beta1) * grad_a1;
         m_a2 = beta1 * m_a2 + (1 - beta1) * grad_a2;
@@ -135,7 +139,32 @@ void BlackScholes::gradient_descent(const std::vector<double>& x_values, CDF_pre
         CDF.a4 -= initial_learning_rate * m_a4_hat / (sqrt(v_a4_hat) + epsilon);
         CDF.a5 -= initial_learning_rate * m_a5_hat / (sqrt(v_a5_hat) + epsilon);
         CDF.p -= initial_learning_rate * m_p_hat / (sqrt(v_p_hat) + epsilon);
+        
+        // Add bounds checking to keep parameters reasonable
+        CDF.p = std::max(0.01, std::min(10.0, CDF.p));
+        CDF.a1 = std::max(-10.0, std::min(10.0, CDF.a1));
+        CDF.a2 = std::max(-10.0, std::min(10.0, CDF.a2));
+        CDF.a3 = std::max(-10.0, std::min(10.0, CDF.a3));
+        CDF.a4 = std::max(-10.0, std::min(10.0, CDF.a4));
+        CDF.a5 = std::max(-10.0, std::min(10.0, CDF.a5));
+        
+        // Progress monitoring
+        if (i % 100 == 0 || i == 0) {
+            printf("Iteration %d: Error = %.10e\n", i, error);
+            printf("  p=%.9f, a1=%.9f, a2=%.9f, a3=%.9f, a4=%.9f, a5=%.9f\n", 
+                   CDF.p, CDF.a1, CDF.a2, CDF.a3, CDF.a4, CDF.a5);
+        }
+
+        // Early stopping condition
+        if (error < 1e-15) {
+            printf("Converged at iteration %d with error %.10e\n", i, error);
+            break;
+        }
     }
+    
+    // Use best parameters found
+    CDF = best_CDF;
+    printf("Final error: %.10e\n", best_error);
 }
 
 CDF_precompute BlackScholes::computeCoefficents(){
@@ -170,7 +199,11 @@ CDF_precompute BlackScholes::computeCoefficents(){
 
 
 double BlackScholes::normalCDF(double x){
-    return 0.0;
+    // Compute coefficients once and cache them
+    static const CDF_precompute coeffs = computeCoefficents();
+    
+    // Use your optimized approximation
+    return approx_CDF(x, coeffs);
 }
 
 //ending namespace

@@ -1,5 +1,3 @@
-"""Neural network implementation for order flow prediction."""
-
 #pragma once
 
 #include <vector>
