@@ -206,6 +206,136 @@ double BlackScholes::normalCDF(double x){
     return approx_CDF(x, coeffs);
 }
 
+void BlackScholes::computeD1D2(const OptionParams& params, double& d1, double& d2) {
+    // TODO: Calculate Black-Scholes d1 and d2 parameters
+    // OPTIMIZATION HINTS:
+    // - Use fast log approximation instead of std::log() for ln(S/K)
+    // - Pre-compute sigma_sqrt_T = sigma * sqrt(T) to avoid redundant sqrt() calls
+    // - Use polynomial approximation for log when S/K is close to 1.0
+    // - Consider lookup tables for commonly used strike/spot ratios
+    // - Use FMA (fused multiply-add) instructions: r_plus_half_sigma2_T = r*T + 0.5*sigma*sigma*T
+    // - Handle edge cases: T→0, sigma→0, S/K→0 or ∞
+    // - Use reciprocal approximation (1/x) instead of division for sigma_sqrt_T
+    
+    // FORMULAS:
+    // d1 = [ln(S/K) + (r + σ²/2)*T] / (σ*√T)
+    // d2 = d1 - σ*√T
+    
+    // EXPECTED INPUTS via OptionParams:
+    // - S: current stock/underlying price (params.spot_price)
+    // - K: strike price (params.strike_price)
+    // - T: time to expiration in years (params.time_to_expiry)
+    // - r: risk-free interest rate (params.risk_free_rate)
+    // - sigma: implied volatility (params.volatility)
+    
+    // PERFORMANCE CRITICAL: This function called for every option pricing
+    // Target: < 50 nanoseconds per call
+    // OPTIMIZED: Using FastMath lookup tables for ultra-fast computation
+    
+    double S = params.spot_price;
+    double K = params.strike_price;
+    double T = params.time_to_expiry;
+    double r = params.risk_free_rate;
+    double sigma = params.volatility;
+    
+    // Ultra-fast lookups using pre-computed arrays (~1-2 CPU cycles each)
+    int days = FastMath::years_to_days(T);
+    double sqrt_T = FastMath::fast_sqrt_days(days);        // ~1-2 cycles vs ~20-50 for std::sqrt
+    double ln_S_over_K = FastMath::fast_log_ratio(S / K);  // ~1-2 cycles vs ~30-60 for std::log
+    
+    // Fast arithmetic operations
+    double sigma_sqrt_T = sigma * sqrt_T;
+    double half_sigma2_T = 0.5 * sigma * sigma * T;
+    double r_T = r * T;
+    
+    // Black-Scholes d1 and d2 formulas
+    d1 = (ln_S_over_K + r_T + half_sigma2_T) / sigma_sqrt_T;
+    d2 = d1 - sigma_sqrt_T;
+}
+
+PricingResult BlackScholes::calculate(const OptionParams& params) {
+    // TODO: Main Black-Scholes pricing function
+    // OPTIMIZATION HINTS:
+    // - Use SIMD instructions (AVX2/AVX-512) for parallel computation of call/put prices
+    // - Calculate all Greeks (delta, gamma, theta, vega, rho) in single pass to avoid redundant calculations
+    // - Pre-compute common subexpressions: sqrt(T), sigma*sqrt(T), log(S/K)
+    // - Use fast exp() approximation or lookup tables for exp(-rT)
+    // - Align PricingResult struct to 64-byte boundaries for cache efficiency
+    // - Avoid branches in critical path - use conditional moves instead
+    // - Consider using restrict pointers if processing arrays of options
+    
+    // ALGORITHM STEPS:
+    // 1. Call computeD1D2() to get d1, d2 parameters
+    // 2. Calculate N(d1), N(d2), N(-d1), N(-d2) using your optimized normalCDF()
+    // 3. Compute call_price = S*N(d1) - K*exp(-r*T)*N(d2)
+    // 4. Compute put_price = K*exp(-r*T)*N(-d2) - S*N(-d1)
+    // 5. Calculate Greeks using partial derivatives
+    // 6. Pack results into PricingResult struct
+    
+    // PERFORMANCE TARGET: < 1 microsecond total
+    // BREAKDOWN: computeD1D2 (50ns) + 4*normalCDF (200ns) + pricing (100ns) + Greeks (650ns)
+    
+    // GREEKS FORMULAS (for reference):
+    // Delta_call = N(d1), Delta_put = N(d1) - 1
+    // Gamma = φ(d1) / (S * σ * √T)  where φ(x) = (1/√(2π)) * exp(-x²/2)
+    // Theta_call = -S*φ(d1)*σ/(2√T) - r*K*exp(-r*T)*N(d2)
+    // Vega = S * φ(d1) * √T
+    // Rho_call = K * T * exp(-r*T) * N(d2)
+    
+    // MEMORY LAYOUT: Pack results efficiently to minimize cache misses
+    // Use aligned loads/stores for SIMD operations
+
+
+    
+    PricingResult result{};
+    
+    // Step 1: Calculate d1 and d2 using optimized FastMath
+    double d1, d2;
+    computeD1D2(params, d1, d2);
+    
+    // Step 2: Calculate normal CDF values using optimized approximation
+    double nd1 = normalCDF(d1);        // N(d1)
+    double nd2 = normalCDF(d2);        // N(d2)  
+    double n_neg_d1 = normalCDF(-d1);  // N(-d1)
+    double n_neg_d2 = normalCDF(-d2);  // N(-d2)
+    
+    // Step 3: Extract parameters for pricing
+    double S = params.spot_price;
+    double K = params.strike_price;
+    double T = params.time_to_expiry;
+    double r = params.risk_free_rate;
+    double sigma = params.volatility;
+    
+    // Step 4: Calculate discount factor
+    double r_T = r * T;
+    double discount_factor = exp(-r_T);  // Could be optimized with fast exp() approximation
+    
+    // Step 5: Black-Scholes option prices
+    result.call_price = S * nd1 - K * discount_factor * nd2;
+    result.put_price = K * discount_factor * n_neg_d2 - S * n_neg_d1;
+    
+    // Step 6: Calculate Greeks for risk management
+    // Get optimized sqrt(T) from FastMath for Greeks calculations
+    int days = FastMath::years_to_days(T);
+    double sqrt_T = FastMath::fast_sqrt_days(days);
+    double sigma_sqrt_T = sigma * sqrt_T;
+    
+    // Standard normal PDF at d1: φ(d1) = (1/√(2π)) * exp(-d1²/2)
+    static constexpr double INV_SQRT_2PI = 0.39894228040143267794;
+    double phi_d1 = INV_SQRT_2PI * exp(-0.5 * d1 * d1);
+    
+    // Greeks calculations
+    result.call_delta = nd1;                    // ∂C/∂S
+    result.put_delta = nd1 - 1.0;              // ∂P/∂S
+    result.gamma = phi_d1 / (S * sigma_sqrt_T); // ∂²C/∂S² (same for calls and puts)
+    result.vega = S * phi_d1 * sqrt_T;          // ∂C/∂σ
+    result.theta = -S * phi_d1 * sigma / (2.0 * sqrt_T) - r * K * discount_factor * nd2; // ∂C/∂T (call)
+    result.rho_call = K * T * discount_factor * nd2;     // ∂C/∂r
+    result.rho_put = -K * T * discount_factor * n_neg_d2; // ∂P/∂r
+    
+    return result;
+}
+
 //ending namespace
     }
 }
