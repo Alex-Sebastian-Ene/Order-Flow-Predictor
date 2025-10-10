@@ -38,7 +38,15 @@ void example_speed_arbitrage() {
     // Market maker's quoted price (stale quote)
     double market_price = 3.50;
     
-    // Detect arbitrage opportunity
+    // WARM-UP: Pre-compute CDF coefficients (excluded from timing)
+    std::cout << "Warming up: Computing Abramowitz & Stegun coefficients...\n";
+    auto warmup_start = std::chrono::high_resolution_clock::now();
+    BlackScholes::detectArbitrage(params, market_price, 0.5, true);
+    auto warmup_end = std::chrono::high_resolution_clock::now();
+    auto warmup_time = std::chrono::duration_cast<std::chrono::milliseconds>(warmup_end - warmup_start).count();
+    std::cout << "Warm-up completed in " << warmup_time << " milliseconds (one-time cost)\n\n";
+    
+    // NOW TIME THE ACTUAL ARBITRAGE DETECTION (with warm cache)
     auto start = std::chrono::high_resolution_clock::now();
     ArbitrageSignal signal = BlackScholes::detectArbitrage(
         params, 

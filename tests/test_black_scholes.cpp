@@ -1,25 +1,5 @@
 // g++ -O3 -march=native -DNDEBUG -std=c++20 test_black_scholes.cpp black_scholes.cpp -o test_bs
-#includ            CHECK_                      // Parity & bounds
-        const double df = std::exp(-c.r*c.T);
-        CHECK( approx_equal(y.call_price - y.put_price, c.S - c.K*df, 5e-7, 5e-9), "put-call parity");
-        CHECK( y.call_price >= 0.0 && y.put_price >= 0.0, "non-negativity");
-        CHECK( y.call_price <= c.S+1e-9, "call <= S");
-        CHECK( y.put_price  <= c.K*df+1e-9, "put <= K*e^(-rT)");
-
-        // Greeks vs reference (vega/gamma/theta tolerances a bit looser; they're sensitive to CDF/pdf accuracy)
-        CHECK_CLOSE(y.call_delta, r.delta_c, 3e-6, 1e-8, "delta(call)");
-        CHECK_CLOSE(y.put_delta , r.delta_p, 3e-6, 1e-8, "delta(put)");
-        CHECK_CLOSE(y.gamma     , r.gamma  , 1e-5, 1e-8, "gamma");
-        CHECK_CLOSE(y.vega      , r.vega   , 1e-5, 1e-8, "vega");
-        CHECK_CLOSE(y.theta     , r.theta_c, 2e-5, 1e-7, "theta(call)");ox_equal(y.call_price - y.put_price, c.S - c.K*df, 5e-7, 5e-9), "put-call parity");
-        CHECK( y.call_price >= 0.0 && y.put_price >= 0.0, "non-negativity");
-        CHECK( y.call_price <= c.S+1e-9, "call <= S");
-        CHECK( y.put_price  <= c.K*df+1e-9, "put <= K*e^(-rT)");
-
-        // Greeks vs reference (vega/gamma/theta tolerances a bit looser; they're sensitive to CDF/pdf accuracy)
-        CHECK_CLOSE(y.call_delta, r.delta_c, 3e-6, 1e-8, "delta(call)");
-        CHECK_CLOSE(y.put_delta , r.delta_p, 3e-6, 1e-8, "delta(put)");
-        CHECK_CLOSE(y.gamma     , r.gamma  , 1e-5, 1e-8, "gamma");ble df = std::exp(-c.r*c.T);
+#includ            CHECK_        const double df = std::exp(-c.r*c.T);
         CHECK( approx_equal(y.call_price - y.put_price, c.S - c.K*df, 5e-7, 5e-9), "put-call parity");
         CHECK( y.call_price >= 0.0 && y.put_price >= 0.0, "non-negativity");
         CHECK( y.call_price <= c.S+1e-9, "call <= S");
