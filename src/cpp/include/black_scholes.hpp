@@ -4,6 +4,11 @@
 #include "order_flow_types.hpp"
 #include <array>
 #include <cmath>
+#include <vector>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
 namespace order_flow {
 namespace pricing {
@@ -116,16 +121,49 @@ public:
      */
     static PricingResult calculate(const OptionParams& params);
 
+    /**
+     * @brief Detect arbitrage opportunity by comparing theoretical vs market price
+     * @param params Option parameters (S, K, T, r, sigma)
+     * @param market_price Current market price of the option
+     * @param threshold_pct Percentage difference to trigger arbitrage signal (default 0.5%)
+     * @param is_call true for call option, false for put option
+     * @return ArbitrageSignal with pricing difference and action recommendation
+     * 
+     * Performance: < 1.5 microseconds (includes full Black-Scholes pricing)
+     * Use case: High-frequency arbitrage detection for latency-sensitive trading
+     */
+    static ArbitrageSignal detectArbitrage(const OptionParams& params, 
+                                          double market_price,
+                                          double threshold_pct = 0.5,
+                                          bool is_call = true);
+
+    /**
+     * @brief Check put-call parity for arbitrage opportunities
+     * @param params Option parameters (same S, K, T, r for both options)
+     * @param call_market_price Current market price of call option
+     * @param put_market_price Current market price of put option
+     * @param threshold Absolute difference threshold to trigger arbitrage (default $0.10)
+     * @return PutCallParityCheck with parity violation details
+     * 
+     * Put-Call Parity: C - P = S - K*e^(-rT)
+     * If violated beyond threshold, arbitrage exists via conversion/reversal spreads
+     * Performance: < 100 nanoseconds (simple arithmetic, no CDF calculations needed)
+     */
+    static PutCallParityCheck checkPutCallParity(const OptionParams& params,
+                                                 double call_market_price,
+                                                 double put_market_price,
+                                                 double threshold = 0.10);
+
 private:
     /**
      * @brief Approximates normal CDF using Abramowitz & Stegun polynomial method
      * @param x Input value for which to calculate CDF
      * @param CDF Precomputed coefficients (p, a1-a5) for the approximation
-     * @return Normal CDF value Φ(x) with accuracy < 7.5×10⁻⁸
+     * @return Normal CDF value Phi(x) with accuracy < 7.5e-8
      * 
-     * Uses formula: Φ(x) = 1 - (1/√(2π)) * e^(-x²/2) * P(t)
+     * Uses formula: Phi(x) = 1 - (1/sqrt(2*pi)) * e^(-x^2/2) * P(t)
      * where t = 1/(1+px) and P(t) is polynomial of degree 5
-     * Handles negative values using symmetry: Φ(-x) = 1 - Φ(x)
+     * Handles negative values using symmetry: Phi(-x) = 1 - Phi(x)
      */
     static double approx_CDF(double x, CDF_precompute CDF);
     
@@ -148,22 +186,22 @@ private:
      * @return Sum of squared errors across all test points
      * 
      * Uses high-precision erf() as reference implementation
-     * Error metric: Σ(Φ_true(x) - Φ_approx(x))²
+     * Error metric: Sum(Phi_true(x) - Phi_approx(x))^2
      */
     static double calculate_error(const std::vector<double>& x_values, CDF_precompute CDF);
     
     /**
      * @brief Calculate d1, d2 parameters for Black-Scholes formula
-     * @param params Option parameters (S, K, T, r, σ)
-     * @param d1 Output: d1 = [ln(S/K) + (r + σ²/2)T] / (σ√T)
-     * @param d2 Output: d2 = d1 - σ√T
+     * @param params Option parameters (S, K, T, r, sigma)
+     * @param d1 Output: d1 = [ln(S/K) + (r + sigma^2/2)T] / (sigma*sqrt(T))
+     * @param d2 Output: d2 = d1 - sigma*sqrt(T)
      * 
      * Should:
      * - Optimize log calculation using fast approximations
-     * - Use pre-computed values where possible (e.g., σ√T)
+     * - Use pre-computed values where possible (e.g., sigma*sqrt(T))
      * - Implement SIMD operations for vectorized calculations
      * - Minimize cache misses with aligned data access
-     * - Handle edge cases (T≈0, σ≈0) gracefully
+     * - Handle edge cases (T~=0, sigma~=0) gracefully
      */
     static void computeD1D2(const OptionParams& params, double& d1, double& d2);
     

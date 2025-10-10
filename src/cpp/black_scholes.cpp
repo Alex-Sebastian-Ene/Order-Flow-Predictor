@@ -3,6 +3,7 @@
 #include <vector>
 #include <limits>
 #include <cstdio>
+#include <chrono>
 
 namespace order_flow{
 namespace pricing{
@@ -214,12 +215,12 @@ void BlackScholes::computeD1D2(const OptionParams& params, double& d1, double& d
     // - Use polynomial approximation for log when S/K is close to 1.0
     // - Consider lookup tables for commonly used strike/spot ratios
     // - Use FMA (fused multiply-add) instructions: r_plus_half_sigma2_T = r*T + 0.5*sigma*sigma*T
-    // - Handle edge cases: T→0, sigma→0, S/K→0 or ∞
+    // - Handle edge cases: T->0, sigma->0, S/K->0 or infinity
     // - Use reciprocal approximation (1/x) instead of division for sigma_sqrt_T
     
     // FORMULAS:
-    // d1 = [ln(S/K) + (r + σ²/2)*T] / (σ*√T)
-    // d2 = d1 - σ*√T
+    // d1 = [ln(S/K) + (r + sigma^2/2)*T] / (sigma*sqrt(T))
+    // d2 = d1 - sigma*sqrt(T)
     
     // EXPECTED INPUTS via OptionParams:
     // - S: current stock/underlying price (params.spot_price)
@@ -277,9 +278,9 @@ PricingResult BlackScholes::calculate(const OptionParams& params) {
     
     // GREEKS FORMULAS (for reference):
     // Delta_call = N(d1), Delta_put = N(d1) - 1
-    // Gamma = φ(d1) / (S * σ * √T)  where φ(x) = (1/√(2π)) * exp(-x²/2)
-    // Theta_call = -S*φ(d1)*σ/(2√T) - r*K*exp(-r*T)*N(d2)
-    // Vega = S * φ(d1) * √T
+    // Gamma = phi(d1) / (S * sigma * sqrt(T))  where phi(x) = (1/sqrt(2*pi)) * exp(-x^2/2)
+    // Theta_call = -S*phi(d1)*sigma/(2*sqrt(T)) - r*K*exp(-r*T)*N(d2)
+    // Vega = S * phi(d1) * sqrt(T)
     // Rho_call = K * T * exp(-r*T) * N(d2)
     
     // MEMORY LAYOUT: Pack results efficiently to minimize cache misses
@@ -296,8 +297,8 @@ PricingResult BlackScholes::calculate(const OptionParams& params) {
     // Step 2: Calculate normal CDF values using optimized approximation
     double nd1 = normalCDF(d1);        // N(d1)
     double nd2 = normalCDF(d2);        // N(d2)  
-    double n_neg_d1 = normalCDF(-d1);  // N(-d1)
-    double n_neg_d2 = normalCDF(-d2);  // N(-d2)
+    double n_neg_d1 = 1 - nd1;  // N(-d1)
+    double n_neg_d2 = 1 - nd2;  // N(-d2)
     
     // Step 3: Extract parameters for pricing
     double S = params.spot_price;
@@ -320,20 +321,114 @@ PricingResult BlackScholes::calculate(const OptionParams& params) {
     double sqrt_T = FastMath::fast_sqrt_days(days);
     double sigma_sqrt_T = sigma * sqrt_T;
     
-    // Standard normal PDF at d1: φ(d1) = (1/√(2π)) * exp(-d1²/2)
+    // Standard normal PDF at d1: phi(d1) = (1/sqrt(2*pi)) * exp(-d1^2/2)
     static constexpr double INV_SQRT_2PI = 0.39894228040143267794;
     double phi_d1 = INV_SQRT_2PI * exp(-0.5 * d1 * d1);
     
     // Greeks calculations
-    result.call_delta = nd1;                    // ∂C/∂S
-    result.put_delta = nd1 - 1.0;              // ∂P/∂S
-    result.gamma = phi_d1 / (S * sigma_sqrt_T); // ∂²C/∂S² (same for calls and puts)
-    result.vega = S * phi_d1 * sqrt_T;          // ∂C/∂σ
-    result.theta = -S * phi_d1 * sigma / (2.0 * sqrt_T) - r * K * discount_factor * nd2; // ∂C/∂T (call)
-    result.rho_call = K * T * discount_factor * nd2;     // ∂C/∂r
-    result.rho_put = -K * T * discount_factor * n_neg_d2; // ∂P/∂r
+    result.call_delta = nd1;                    // dC/dS
+    result.put_delta = nd1 - 1.0;              // dP/dS
+    result.gamma = phi_d1 / (S * sigma_sqrt_T); // d^2C/dS^2 (same for calls and puts)
+    result.vega = S * phi_d1 * sqrt_T;          // dC/d(sigma)
+    result.theta = -S * phi_d1 * sigma / (2.0 * sqrt_T) - r * K * discount_factor * nd2; // dC/dT (call)
+    result.rho_call = K * T * discount_factor * nd2;     // dC/dr
+    result.rho_put = -K * T * discount_factor * n_neg_d2; // dP/dr
     
     return result;
+}
+
+ArbitrageSignal BlackScholes::detectArbitrage(const OptionParams& params,
+                                              double market_price,
+                                              double threshold_pct,
+                                              bool is_call) {
+    // ULTRA-LOW LATENCY ARBITRAGE DETECTION
+    // Target: < 1.5 microseconds total
+    // Use case: Detect mispriced options faster than competition
+    
+    ArbitrageSignal signal{};
+    
+    // Step 1: Calculate theoretical price using optimized Black-Scholes
+    PricingResult pricing = calculate(params);
+    
+    // Step 2: Get theoretical price for the specific option type
+    double theoretical_price = is_call ? pricing.call_price : pricing.put_price;
+    double delta = is_call ? pricing.call_delta : pricing.put_delta;
+    
+    // Step 3: Calculate price differences
+    signal.theoretical_price = theoretical_price;
+    signal.market_price = market_price;
+    signal.price_diff = market_price - theoretical_price;
+    signal.price_diff_pct = (signal.price_diff / theoretical_price) * 100.0;
+    
+    // Step 4: Determine arbitrage opportunity
+    double abs_diff_pct = fabs(signal.price_diff_pct);
+    signal.is_arbitrage = abs_diff_pct > threshold_pct;
+    
+    // Step 5: Generate trading signals
+    if (signal.is_arbitrage) {
+        // Market undervalued -> BUY option
+        signal.should_buy = signal.price_diff < 0;
+        
+        // Market overvalued -> SELL option
+        signal.should_sell = signal.price_diff > 0;
+        
+        // Calculate expected profit per contract (100 shares per contract)
+        signal.expected_profit = fabs(signal.price_diff) * 100.0;
+        
+        // Delta hedge size (shares to trade in opposite direction)
+        signal.delta_hedge_size = fabs(delta) * 100.0;
+    } else {
+        signal.should_buy = false;
+        signal.should_sell = false;
+        signal.expected_profit = 0.0;
+        signal.delta_hedge_size = 0.0;
+    }
+    
+    // Step 6: Timestamp for latency tracking (nanoseconds since epoch)
+    auto now = std::chrono::high_resolution_clock::now();
+    signal.timestamp_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        now.time_since_epoch()
+    ).count();
+    
+    return signal;
+}
+
+PutCallParityCheck BlackScholes::checkPutCallParity(const OptionParams& params,
+                                                     double call_market_price,
+                                                     double put_market_price,
+                                                     double threshold) {
+    // ULTRA-FAST PUT-CALL PARITY CHECK
+    // Target: < 100 nanoseconds (no CDF calculations needed)
+    // Formula: C - P = S - K*e^(-rT)
+    // If violated -> arbitrage via conversion/reversal spreads
+    
+    PutCallParityCheck check{};
+    
+    // Store input prices
+    check.call_price = call_market_price;
+    check.put_price = put_market_price;
+    check.spot_price = params.spot_price;
+    
+    // Calculate present value of strike price
+    double r_T = params.risk_free_rate * params.time_to_expiry;
+    check.pv_strike = params.strike_price * exp(-r_T);
+    
+    // Put-Call Parity: C - P = S - K*e^(-rT)
+    check.lhs = call_market_price - put_market_price;  // Left side
+    check.rhs = params.spot_price - check.pv_strike;   // Right side
+    check.parity_diff = check.lhs - check.rhs;
+    
+    // Check if parity is violated beyond threshold
+    check.parity_violated = fabs(check.parity_diff) > threshold;
+    
+    if (check.parity_violated) {
+        // Arbitrage profit per spread trade
+        check.arbitrage_profit = fabs(check.parity_diff) * 100.0; // Per contract
+    } else {
+        check.arbitrage_profit = 0.0;
+    }
+    
+    return check;
 }
 
 //ending namespace
