@@ -25,7 +25,7 @@ void example_speed_arbitrage() {
     std::cout << "EXAMPLE 1: SPEED ARBITRAGE - Detect Mispriced Options\n";
     std::cout << "Strategy: Price options faster than market makers, capture mispricings\n";
     print_separator();
-    
+ 
     // Option parameters: AAPL call option
     OptionParams params{
         .spot_price = 175.00,      // AAPL trading at $175
@@ -33,7 +33,7 @@ void example_speed_arbitrage() {
         .time_to_expiry = 30.0/365.0,  // 30 days to expiration
         .risk_free_rate = 0.05,    // 5% risk-free rate
         .volatility = 0.25         // 25% implied volatility
-    };
+    };    
     
     // Market maker's quoted price (stale quote)
     double market_price = 3.50;
@@ -123,7 +123,7 @@ void example_put_call_parity() {
             std::cout << "  1. SELL put\n";
             std::cout << "  2. BUY call\n";
             std::cout << "  3. SELL SHORT 100 shares of stock\n";
-        }
+        
         std::cout << "Arbitrage Profit: $" << parity.arbitrage_profit << " per spread\n";
     } else {
         std::cout << "Put-call parity holds (within threshold)\n";

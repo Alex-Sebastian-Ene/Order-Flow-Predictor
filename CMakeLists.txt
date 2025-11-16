@@ -8,6 +8,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Options
 option(BUILD_TESTS "Build tests" ON)
 option(USE_CONAN "Use Conan package manager" ON)
+option(BUILD_BENCHMARKS "Build benchmarking tools" ON)
 
 # Set output directories
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
@@ -22,6 +23,10 @@ endif()
 
 # Add source directory
 add_subdirectory(src/cpp)
+
+if(BUILD_BENCHMARKS)
+    add_subdirectory(benchmarks)
+endif()
 
 # Testing
 if(BUILD_TESTS)
