@@ -5,6 +5,7 @@
 #include <array>
 #include <cmath>
 #include <vector>
+#include <cstddef>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -30,12 +31,12 @@ struct CDF_precompute{
 class FastMath {
 private:
     // Maximum 5 years = 1825 days for option expiration
-    static constexpr size_t MAX_DAYS = 1825;
+    static constexpr size_t MAX_NUMBER_DAYS = 1825;
     
     // Pre-computed sqrt values for days 0-1825
-    alignas(64) static constexpr std::array<double, MAX_DAYS + 1> sqrt_cache = []() {
-        std::array<double, MAX_DAYS + 1> cache{};
-        for (size_t i = 0; i <= MAX_DAYS; ++i) {
+    alignas(64) static inline const std::array<double, MAX_NUMBER_DAYS + 1> sqrt_cache = []() {
+        std::array<double, MAX_NUMBER_DAYS+ 1> cache{};
+        for (size_t i = 0; i <= MAX_NUMBER_DAYS; ++i) {
             double years = static_cast<double>(i) / 365.0;
             cache[i] = std::sqrt(years);
         }
@@ -48,7 +49,7 @@ private:
     static constexpr double LOG_MAX_RATIO = 1.5;
     static constexpr double LOG_SCALE = static_cast<double>(LOG_CACHE_SIZE - 1) / (LOG_MAX_RATIO - LOG_MIN_RATIO);
     
-    alignas(64) static constexpr std::array<double, LOG_CACHE_SIZE> log_cache = []() {
+    alignas(64) static inline const std::array<double, LOG_CACHE_SIZE> log_cache = []() {
         std::array<double, LOG_CACHE_SIZE> cache{};
         for (size_t i = 0; i < LOG_CACHE_SIZE; ++i) {
             double ratio = LOG_MIN_RATIO + (static_cast<double>(i) / (LOG_CACHE_SIZE - 1)) * (LOG_MAX_RATIO - LOG_MIN_RATIO);
@@ -120,6 +121,18 @@ public:
      * - Use cache-aligned data structures
      */
     static PricingResult calculate(const OptionParams& params);
+    static void calculate_batch(const OptionBatchView& batch, PricingBatchView& out);
+    static void taylor_update(const TaylorGreeks& base_state,
+                              double dS,
+                              double dSigma,
+                              PricingResult& out);
+    static void taylor_update_batch(const TaylorGreeks* base_states,
+                                    const double* dS,
+                                    const double* dSigma,
+                                    std::size_t count,
+                                    PricingBatchView& out);
+    static TaylorGreeks snapshotTaylorGreeks(const OptionParams& params,
+                                             const PricingResult& pricing);
 
     /**
      * @brief Detect arbitrage opportunity by comparing theoretical vs market price
@@ -155,6 +168,11 @@ public:
                                                  double threshold = 0.10);
 
 private:
+    struct KernelCaps {
+        bool avx512;
+        bool avx2;
+    };
+
     /**
      * @brief Approximates normal CDF using Abramowitz & Stegun polynomial method
      * @param x Input value for which to calculate CDF
@@ -204,6 +222,10 @@ private:
      * - Handle edge cases (T~=0, sigma~=0) gracefully
      */
     static void computeD1D2(const OptionParams& params, double& d1, double& d2);
+    static void calculateScalarBatch(const OptionBatchView& batch, PricingBatchView& out);
+    static void calculateSIMD(const OptionBatchView& batch, PricingBatchView& out);
+    static KernelCaps queryCaps();
+    static void ensureBatchView(const OptionBatchView& batch, const PricingBatchView& out);
     
 
 };

@@ -4,9 +4,26 @@
 #include <limits>
 #include <cstdio>
 #include <chrono>
+#include <stdexcept>
+#include <algorithm>
+#include <immintrin.h>
+
+#if defined(_MSC_VER)
+#include <intrin.h>
+#else
+#include <cpuid.h>
+#endif
 
 namespace order_flow{
 namespace pricing{
+
+namespace {
+constexpr double INV_SQRT_2PI = 0.39894228040143267794;
+constexpr bool LOG_CDF_CALIBRATION = false;
+inline double normal_pdf(double x) {
+    return INV_SQRT_2PI * std::exp(-0.5 * x * x);
+}
+}
 
 
 double reference_cdf(double x){
@@ -150,22 +167,26 @@ void BlackScholes::gradient_descent(const std::vector<double>& x_values, CDF_pre
         CDF.a5 = std::max(-10.0, std::min(10.0, CDF.a5));
         
         // Progress monitoring
-        if (i % 100 == 0 || i == 0) {
-            printf("Iteration %d: Error = %.10e\n", i, error);
-            printf("  p=%.9f, a1=%.9f, a2=%.9f, a3=%.9f, a4=%.9f, a5=%.9f\n", 
-                   CDF.p, CDF.a1, CDF.a2, CDF.a3, CDF.a4, CDF.a5);
-        }
-
-        // Early stopping condition
-        if (error < 1e-15) {
-            printf("Converged at iteration %d with error %.10e\n", i, error);
+        if constexpr (LOG_CDF_CALIBRATION) {
+            if (i % 100 == 0 || i == 0) {
+                printf("Iteration %d: Error = %.10e\n", i, error);
+                printf("  p=%.9f, a1=%.9f, a2=%.9f, a3=%.9f, a4=%.9f, a5=%.9f\n",
+                       CDF.p, CDF.a1, CDF.a2, CDF.a3, CDF.a4, CDF.a5);
+            }
+            if (error < 1e-15) {
+                printf("Converged at iteration %d with error %.10e\n", i, error);
+                break;
+            }
+        } else if (error < 1e-15) {
             break;
         }
     }
-    
+
     // Use best parameters found
     CDF = best_CDF;
-    printf("Final error: %.10e\n", best_error);
+    if constexpr (LOG_CDF_CALIBRATION) {
+        printf("Final error: %.10e\n", best_error);
+    }
 }
 
 CDF_precompute BlackScholes::computeCoefficents(){
@@ -322,8 +343,7 @@ PricingResult BlackScholes::calculate(const OptionParams& params) {
     double sigma_sqrt_T = sigma * sqrt_T;
     
     // Standard normal PDF at d1: phi(d1) = (1/sqrt(2*pi)) * exp(-d1^2/2)
-    static constexpr double INV_SQRT_2PI = 0.39894228040143267794;
-    double phi_d1 = INV_SQRT_2PI * exp(-0.5 * d1 * d1);
+    double phi_d1 = normal_pdf(d1);
     
     // Greeks calculations
     result.call_delta = nd1;                    // dC/dS
@@ -333,8 +353,34 @@ PricingResult BlackScholes::calculate(const OptionParams& params) {
     result.theta = -S * phi_d1 * sigma / (2.0 * sqrt_T) - r * K * discount_factor * nd2; // dC/dT (call)
     result.rho_call = K * T * discount_factor * nd2;     // dC/dr
     result.rho_put = -K * T * discount_factor * n_neg_d2; // dP/dr
+    double safe_sigma = sigma > 1e-12 ? sigma : 1e-12;
+    double inv_sigma = 1.0 / safe_sigma;
+    result.vanna = phi_d1 * (sqrt_T - d1 * inv_sigma);
+    result.vomma = result.vega * d1 * d2 * inv_sigma;
     
     return result;
+}
+
+TaylorGreeks BlackScholes::snapshotTaylorGreeks(const OptionParams& params,
+                                                const PricingResult& pricing) {
+    TaylorGreeks state{};
+    state.spot = params.spot_price;
+    state.strike = params.strike_price;
+    state.sigma = params.volatility;
+    int days = FastMath::years_to_days(params.time_to_expiry);
+    state.sqrt_time = FastMath::fast_sqrt_days(std::clamp(days, 0, 1825));
+    state.call_price = pricing.call_price;
+    state.put_price = pricing.put_price;
+    state.call_delta = pricing.call_delta;
+    state.put_delta = pricing.put_delta;
+    state.gamma = pricing.gamma;
+    state.vega = pricing.vega;
+    state.theta = pricing.theta;
+    state.rho_call = pricing.rho_call;
+    state.rho_put = pricing.rho_put;
+    state.vanna = pricing.vanna;
+    state.vomma = pricing.vomma;
+    return state;
 }
 
 ArbitrageSignal BlackScholes::detectArbitrage(const OptionParams& params,
@@ -429,6 +475,164 @@ PutCallParityCheck BlackScholes::checkPutCallParity(const OptionParams& params,
     }
     
     return check;
+}
+
+void BlackScholes::taylor_update(const TaylorGreeks& base_state,
+                                 double dS,
+                                 double dSigma,
+                                 PricingResult& out) {
+    double ds2 = dS * dS;
+    double dsigma2 = dSigma * dSigma;
+    double cross = dS * dSigma;
+    double gamma_term = 0.5 * base_state.gamma * ds2;
+    double vomma_term = 0.5 * base_state.vomma * dsigma2;
+    double vega_term = base_state.vega * dSigma;
+    double cross_term = base_state.vanna * cross;
+
+    out.call_price = base_state.call_price + base_state.call_delta * dS +
+                     gamma_term + vega_term + vomma_term + cross_term;
+    out.put_price = base_state.put_price + base_state.put_delta * dS +
+                    gamma_term + vega_term + vomma_term + cross_term;
+
+    double delta_shift = base_state.gamma * dS + base_state.vanna * dSigma;
+    out.call_delta = base_state.call_delta + delta_shift;
+    out.put_delta = base_state.put_delta + delta_shift;
+    out.gamma = base_state.gamma;
+    out.vega = base_state.vega + base_state.vanna * dS + base_state.vomma * dSigma;
+    out.theta = base_state.theta;
+    out.rho_call = base_state.rho_call;
+    out.rho_put = base_state.rho_put;
+    out.vanna = base_state.vanna;
+    out.vomma = base_state.vomma;
+}
+
+void BlackScholes::taylor_update_batch(const TaylorGreeks* base_states,
+                                       const double* dS,
+                                       const double* dSigma,
+                                       std::size_t count,
+                                       PricingBatchView& out) {
+    if (count == 0) {
+        return;
+    }
+    if (!base_states || !dS || !dSigma) {
+        throw std::invalid_argument("Taylor batch inputs cannot be null");
+    }
+    if (out.count < count) {
+        throw std::invalid_argument("Result view smaller than Taylor batch");
+    }
+    std::size_t stride = out.stride == 0 ? 1 : out.stride;
+    if (!out.call_ptr || !out.put_ptr || !out.delta_ptr || !out.put_delta_ptr || !out.gamma_ptr ||
+        !out.vega_ptr || !out.theta_ptr || !out.rho_call_ptr || !out.rho_put_ptr ||
+        !out.vanna_ptr || !out.vomma_ptr) {
+        throw std::invalid_argument("Taylor batch output pointers cannot be null");
+    }
+    PricingResult tmp{};
+    for (std::size_t i = 0; i < count; ++i) {
+        taylor_update(base_states[i], dS[i], dSigma[i], tmp);
+        std::size_t idx = i * stride;
+        out.call_ptr[idx] = tmp.call_price;
+        out.put_ptr[idx] = tmp.put_price;
+        out.delta_ptr[idx] = tmp.call_delta;
+        out.put_delta_ptr[idx] = tmp.put_delta;
+        out.gamma_ptr[idx] = tmp.gamma;
+        out.vega_ptr[idx] = tmp.vega;
+        out.theta_ptr[idx] = tmp.theta;
+        out.rho_call_ptr[idx] = tmp.rho_call;
+        out.rho_put_ptr[idx] = tmp.rho_put;
+        out.vanna_ptr[idx] = tmp.vanna;
+        out.vomma_ptr[idx] = tmp.vomma;
+    }
+}
+
+void BlackScholes::calculate_batch(const OptionBatchView& batch, PricingBatchView& out) {
+    ensureBatchView(batch, out);
+    if (batch.count == 0) {
+        return;
+    }
+    KernelCaps caps = queryCaps();
+    bool can_vec = (batch.stride <= 1 && out.stride <= 1) && (caps.avx512 || caps.avx2);
+    if (can_vec) {
+        calculateSIMD(batch, out);
+    } else {
+        calculateScalarBatch(batch, out);
+    }
+}
+
+void BlackScholes::calculateScalarBatch(const OptionBatchView& batch, PricingBatchView& out) {
+    std::size_t in_stride = batch.stride == 0 ? 1 : batch.stride;
+    std::size_t out_stride = out.stride == 0 ? 1 : out.stride;
+    for (std::size_t i = 0; i < batch.count; ++i) {
+        std::size_t in_idx = i * in_stride;
+        OptionParams params{};
+        params.spot_price = batch.spot_ptr[in_idx];
+        params.strike_price = batch.strike_ptr[in_idx];
+        params.time_to_expiry = batch.time_ptr[in_idx];
+        params.risk_free_rate = batch.rate_ptr[in_idx];
+        params.volatility = batch.vol_ptr[in_idx];
+        PricingResult pricing = calculate(params);
+        std::size_t out_idx = i * out_stride;
+        out.call_ptr[out_idx] = pricing.call_price;
+        out.put_ptr[out_idx] = pricing.put_price;
+        out.delta_ptr[out_idx] = pricing.call_delta;
+        out.put_delta_ptr[out_idx] = pricing.put_delta;
+        out.gamma_ptr[out_idx] = pricing.gamma;
+        out.vega_ptr[out_idx] = pricing.vega;
+        out.theta_ptr[out_idx] = pricing.theta;
+        out.rho_call_ptr[out_idx] = pricing.rho_call;
+        out.rho_put_ptr[out_idx] = pricing.rho_put;
+        out.vanna_ptr[out_idx] = pricing.vanna;
+        out.vomma_ptr[out_idx] = pricing.vomma;
+    }
+}
+
+void BlackScholes::calculateSIMD(const OptionBatchView& batch, PricingBatchView& out) {
+    // TODO: Implement AVX2/AVX-512 kernel. For now fallback to scalar path to
+    // maintain correctness while the vector math tables are finalized.
+    calculateScalarBatch(batch, out);
+}
+
+BlackScholes::KernelCaps BlackScholes::queryCaps() {
+    static const KernelCaps caps = []() {
+        KernelCaps detected{};
+#if defined(_MSC_VER)
+        int cpu_info[4] = {0};
+        __cpuidex(cpu_info, 0, 0);
+        int max_leaf = cpu_info[0];
+        if (max_leaf >= 7) {
+            __cpuidex(cpu_info, 7, 0);
+            detected.avx2 = (cpu_info[1] & (1 << 5)) != 0;
+            detected.avx512 = (cpu_info[1] & (1 << 16)) != 0;
+        }
+#else
+        unsigned int eax = 0, ebx = 0, ecx = 0, edx = 0;
+        unsigned int max_leaf = __get_cpuid_max(0, nullptr);
+        if (max_leaf >= 7) {
+            __cpuid_count(7, 0, eax, ebx, ecx, edx);
+            detected.avx2 = (ebx & (1u << 5)) != 0;
+            detected.avx512 = (ebx & (1u << 16)) != 0;
+        }
+#endif
+        return detected;
+    }();
+    return caps;
+}
+
+void BlackScholes::ensureBatchView(const OptionBatchView& batch, const PricingBatchView& out) {
+    if (batch.count != out.count) {
+        throw std::invalid_argument("Batch input/output mismatch");
+    }
+    if (batch.count == 0) {
+        return;
+    }
+    if (!batch.spot_ptr || !batch.strike_ptr || !batch.time_ptr ||
+        !batch.rate_ptr || !batch.vol_ptr) {
+        throw std::invalid_argument("Batch option pointers cannot be null");
+    }
+    if (!out.call_ptr || !out.put_ptr || !out.delta_ptr || !out.put_delta_ptr || !out.gamma_ptr ||
+        !out.vega_ptr || !out.theta_ptr || !out.rho_call_ptr || !out.rho_put_ptr ||
+        !out.vanna_ptr || !out.vomma_ptr) {
+        throw std::invalid_argument("Batch output pointers cannot be null");
+    }
 }
 
 //ending namespace
