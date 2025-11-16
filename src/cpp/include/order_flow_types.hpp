@@ -5,6 +5,7 @@
 #include <chrono>
 #include <array>
 #include <cstdint>
+#include <cstddef>
 
 namespace order_flow {
 namespace types {
@@ -40,6 +41,52 @@ struct PricingResult{
     double vega;            // dC/d(sigma) - Vega (sensitivity to volatility)
     double rho_call;        // dC/dr - Call rho (sensitivity to interest rate)
     double rho_put;         // dP/dr - Put rho
+    double vanna;           // d^2C/dS d(sigma) - cross sensitivity
+    double vomma;           // d^2C/d(sigma)^2 - convexity in volatility
+};
+
+struct alignas(64) OptionBatchView{
+    const double* spot_ptr;
+    const double* strike_ptr;
+    const double* time_ptr;
+    const double* rate_ptr;
+    const double* vol_ptr;
+    std::size_t count;
+    std::size_t stride;
+};
+
+struct alignas(64) PricingBatchView{
+    double* call_ptr;
+    double* put_ptr;
+    double* delta_ptr;
+    double* put_delta_ptr;
+    double* gamma_ptr;
+    double* vega_ptr;
+    double* theta_ptr;
+    double* rho_call_ptr;
+    double* rho_put_ptr;
+    double* vanna_ptr;
+    double* vomma_ptr;
+    std::size_t count;
+    std::size_t stride;
+};
+
+struct alignas(64) TaylorGreeks{
+    double spot;
+    double strike;
+    double sqrt_time;
+    double sigma;
+    double call_price;
+    double put_price;
+    double call_delta;
+    double put_delta;
+    double gamma;
+    double vega;
+    double theta;
+    double rho_call;
+    double rho_put;
+    double vanna;
+    double vomma;
 };
 
 struct ArbitrageSignal{
