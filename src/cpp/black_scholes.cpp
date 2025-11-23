@@ -8,6 +8,10 @@
 #include <algorithm>
 #include <immintrin.h>
 
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic ignored "-Wpsabi"
+#endif
+
 #if defined(_MSC_VER)
 #include <intrin.h>
 #else
@@ -24,6 +28,256 @@ inline double normal_pdf(double x) {
     return INV_SQRT_2PI * std::exp(-0.5 * x * x);
 }
 }
+
+#if defined(__GNUC__) || defined(__clang__)
+#define OFP_TARGET_AVX2 __attribute__((target("avx2,fma")))
+#define OFP_TARGET_AVX512 __attribute__((target("avx512f")))
+#define OFP_CAN_COMPILE_AVX2 1
+#define OFP_CAN_COMPILE_AVX512 1
+#elif defined(_MSC_VER) && defined(__AVX2__)
+#define OFP_TARGET_AVX2
+#define OFP_TARGET_AVX512
+#define OFP_CAN_COMPILE_AVX2 1
+#define OFP_CAN_COMPILE_AVX512 0
+#else
+#define OFP_TARGET_AVX2
+#define OFP_TARGET_AVX512
+#define OFP_CAN_COMPILE_AVX2 0
+#define OFP_CAN_COMPILE_AVX512 0
+#endif
+
+
+#if OFP_CAN_COMPILE_AVX2
+template <typename Fn>
+OFP_TARGET_AVX2 inline __m256d apply_scalar_fn_256(__m256d v, Fn&& fn) {
+    alignas(32) double buf[4];
+    _mm256_storeu_pd(buf, v);
+    for (int lane = 0; lane < 4; ++lane) {
+        buf[lane] = fn(buf[lane]);
+    }
+    return _mm256_loadu_pd(buf);
+}
+
+OFP_TARGET_AVX2 static void calculateAVX2Batch(const OptionBatchView& batch, PricingBatchView& out) {
+    const std::size_t lanes = 4;
+    const __m256d one = _mm256_set1_pd(1.0);
+    const __m256d half = _mm256_set1_pd(0.5);
+    const __m256d neg_half = _mm256_set1_pd(-0.5);
+    const __m256d inv_sqrt = _mm256_set1_pd(INV_SQRT_2PI);
+    const __m256d eps = _mm256_set1_pd(1e-12);
+    std::size_t i = 0;
+    for (; i + lanes <= batch.count; i += lanes) {
+        __m256d spot = _mm256_loadu_pd(batch.spot_ptr + i);
+        __m256d strike = _mm256_loadu_pd(batch.strike_ptr + i);
+        __m256d T = _mm256_loadu_pd(batch.time_ptr + i);
+        __m256d r = _mm256_loadu_pd(batch.rate_ptr + i);
+        __m256d sigma = _mm256_loadu_pd(batch.vol_ptr + i);
+
+        __m256d ratio = _mm256_div_pd(spot, strike);
+        __m256d ln_ratio = apply_scalar_fn_256(ratio, [](double v) {
+            return std::log(v);
+        });
+
+        __m256d sqrt_T = _mm256_sqrt_pd(T);
+        __m256d sigma_sqrt_T = _mm256_mul_pd(sigma, sqrt_T);
+        __m256d sigma_sq = _mm256_mul_pd(sigma, sigma);
+        __m256d half_sigma2_T = _mm256_mul_pd(half, _mm256_mul_pd(sigma_sq, T));
+        __m256d rT = _mm256_mul_pd(r, T);
+        __m256d numerator = _mm256_add_pd(_mm256_add_pd(ln_ratio, rT), half_sigma2_T);
+        __m256d d1 = _mm256_div_pd(numerator, _mm256_max_pd(sigma_sqrt_T, eps));
+        __m256d d2 = _mm256_sub_pd(d1, sigma_sqrt_T);
+
+        __m256d nd1 = apply_scalar_fn_256(d1, [](double v) {
+            return BlackScholes::normalCDF(v);
+        });
+        __m256d nd2 = apply_scalar_fn_256(d2, [](double v) {
+            return BlackScholes::normalCDF(v);
+        });
+        __m256d n_neg_d1 = _mm256_sub_pd(one, nd1);
+        __m256d n_neg_d2 = _mm256_sub_pd(one, nd2);
+
+        __m256d discount = apply_scalar_fn_256(_mm256_sub_pd(_mm256_setzero_pd(), rT), [](double v) {
+            return std::exp(v);
+        });
+
+        __m256d neg_half_d1_sq = _mm256_mul_pd(neg_half, _mm256_mul_pd(d1, d1));
+        __m256d exp_term = apply_scalar_fn_256(neg_half_d1_sq, [](double v) {
+            return std::exp(v);
+        });
+        __m256d phi = _mm256_mul_pd(inv_sqrt, exp_term);
+
+        __m256d call_price = _mm256_sub_pd(_mm256_mul_pd(spot, nd1), _mm256_mul_pd(_mm256_mul_pd(strike, discount), nd2));
+        __m256d put_price = _mm256_sub_pd(_mm256_mul_pd(_mm256_mul_pd(strike, discount), n_neg_d2), _mm256_mul_pd(spot, n_neg_d1));
+
+        __m256d call_delta = nd1;
+        __m256d put_delta = _mm256_sub_pd(nd1, one);
+        __m256d denom = _mm256_max_pd(_mm256_mul_pd(spot, sigma_sqrt_T), eps);
+        __m256d gamma = _mm256_div_pd(phi, denom);
+        __m256d vega = _mm256_mul_pd(_mm256_mul_pd(spot, phi), sqrt_T);
+        __m256d theta_first = _mm256_div_pd(_mm256_mul_pd(_mm256_mul_pd(spot, phi), _mm256_mul_pd(sigma, _mm256_set1_pd(-1.0))), _mm256_mul_pd(_mm256_set1_pd(2.0), _mm256_max_pd(sqrt_T, eps)));
+        __m256d theta_second = _mm256_mul_pd(_mm256_mul_pd(_mm256_mul_pd(r, strike), discount), nd2);
+        __m256d theta = _mm256_sub_pd(theta_first, theta_second);
+        __m256d rho_call = _mm256_mul_pd(_mm256_mul_pd(_mm256_mul_pd(strike, T), discount), nd2);
+        __m256d rho_put = _mm256_mul_pd(_mm256_set1_pd(-1.0), _mm256_mul_pd(_mm256_mul_pd(_mm256_mul_pd(strike, T), discount), n_neg_d2));
+
+        __m256d safe_sigma = _mm256_max_pd(sigma, eps);
+        __m256d inv_sigma = _mm256_div_pd(one, safe_sigma);
+        __m256d vanna = _mm256_mul_pd(phi, _mm256_sub_pd(sqrt_T, _mm256_mul_pd(d1, inv_sigma)));
+        __m256d vomma = _mm256_mul_pd(vega, _mm256_mul_pd(d1, _mm256_mul_pd(d2, inv_sigma)));
+
+        _mm256_storeu_pd(out.call_ptr + i, call_price);
+        _mm256_storeu_pd(out.put_ptr + i, put_price);
+        _mm256_storeu_pd(out.delta_ptr + i, call_delta);
+        _mm256_storeu_pd(out.put_delta_ptr + i, put_delta);
+        _mm256_storeu_pd(out.gamma_ptr + i, gamma);
+        _mm256_storeu_pd(out.vega_ptr + i, vega);
+        _mm256_storeu_pd(out.theta_ptr + i, theta);
+        _mm256_storeu_pd(out.rho_call_ptr + i, rho_call);
+        _mm256_storeu_pd(out.rho_put_ptr + i, rho_put);
+        _mm256_storeu_pd(out.vanna_ptr + i, vanna);
+        _mm256_storeu_pd(out.vomma_ptr + i, vomma);
+    }
+
+    if (i < batch.count) {
+        for (std::size_t j = i; j < batch.count; ++j) {
+            OptionParams params{};
+            params.spot_price = batch.spot_ptr[j];
+            params.strike_price = batch.strike_ptr[j];
+            params.time_to_expiry = batch.time_ptr[j];
+            params.risk_free_rate = batch.rate_ptr[j];
+            params.volatility = batch.vol_ptr[j];
+            PricingResult res = BlackScholes::calculate(params);
+            out.call_ptr[j] = res.call_price;
+            out.put_ptr[j] = res.put_price;
+            out.delta_ptr[j] = res.call_delta;
+            out.put_delta_ptr[j] = res.put_delta;
+            out.gamma_ptr[j] = res.gamma;
+            out.vega_ptr[j] = res.vega;
+            out.theta_ptr[j] = res.theta;
+            out.rho_call_ptr[j] = res.rho_call;
+            out.rho_put_ptr[j] = res.rho_put;
+            out.vanna_ptr[j] = res.vanna;
+            out.vomma_ptr[j] = res.vomma;
+        }
+    }
+}
+#endif
+
+#if OFP_CAN_COMPILE_AVX512
+template <typename Fn>
+OFP_TARGET_AVX512 inline __m512d apply_scalar_fn_512(__m512d v, Fn&& fn) {
+    alignas(64) double buf[8];
+    _mm512_storeu_pd(buf, v);
+    for (int lane = 0; lane < 8; ++lane) {
+        buf[lane] = fn(buf[lane]);
+    }
+    return _mm512_loadu_pd(buf);
+}
+
+OFP_TARGET_AVX512 static void calculateAVX512Batch(const OptionBatchView& batch, PricingBatchView& out) {
+    const std::size_t lanes = 8;
+    const __m512d one = _mm512_set1_pd(1.0);
+    const __m512d half = _mm512_set1_pd(0.5);
+    const __m512d neg_half = _mm512_set1_pd(-0.5);
+    const __m512d inv_sqrt = _mm512_set1_pd(INV_SQRT_2PI);
+    const __m512d eps = _mm512_set1_pd(1e-12);
+    std::size_t i = 0;
+    for (; i + lanes <= batch.count; i += lanes) {
+        __m512d spot = _mm512_loadu_pd(batch.spot_ptr + i);
+        __m512d strike = _mm512_loadu_pd(batch.strike_ptr + i);
+        __m512d T = _mm512_loadu_pd(batch.time_ptr + i);
+        __m512d r = _mm512_loadu_pd(batch.rate_ptr + i);
+        __m512d sigma = _mm512_loadu_pd(batch.vol_ptr + i);
+
+        __m512d ratio = _mm512_div_pd(spot, strike);
+        __m512d ln_ratio = apply_scalar_fn_512(ratio, [](double v) {
+            return std::log(v);
+        });
+
+        __m512d sqrt_T = _mm512_sqrt_pd(T);
+        __m512d sigma_sqrt_T = _mm512_mul_pd(sigma, sqrt_T);
+        __m512d sigma_sq = _mm512_mul_pd(sigma, sigma);
+        __m512d half_sigma2_T = _mm512_mul_pd(half, _mm512_mul_pd(sigma_sq, T));
+        __m512d rT = _mm512_mul_pd(r, T);
+        __m512d numerator = _mm512_add_pd(_mm512_add_pd(ln_ratio, rT), half_sigma2_T);
+        __m512d d1 = _mm512_div_pd(numerator, _mm512_max_pd(sigma_sqrt_T, eps));
+        __m512d d2 = _mm512_sub_pd(d1, sigma_sqrt_T);
+
+        __m512d nd1 = apply_scalar_fn_512(d1, [](double v) {
+            return BlackScholes::normalCDF(v);
+        });
+        __m512d nd2 = apply_scalar_fn_512(d2, [](double v) {
+            return BlackScholes::normalCDF(v);
+        });
+        __m512d n_neg_d1 = _mm512_sub_pd(one, nd1);
+        __m512d n_neg_d2 = _mm512_sub_pd(one, nd2);
+
+        __m512d discount = apply_scalar_fn_512(_mm512_sub_pd(_mm512_setzero_pd(), rT), [](double v) {
+            return std::exp(v);
+        });
+
+        __m512d neg_half_d1_sq = _mm512_mul_pd(neg_half, _mm512_mul_pd(d1, d1));
+        __m512d exp_term = apply_scalar_fn_512(neg_half_d1_sq, [](double v) {
+            return std::exp(v);
+        });
+        __m512d phi = _mm512_mul_pd(inv_sqrt, exp_term);
+
+        __m512d call_price = _mm512_sub_pd(_mm512_mul_pd(spot, nd1), _mm512_mul_pd(_mm512_mul_pd(strike, discount), nd2));
+        __m512d put_price = _mm512_sub_pd(_mm512_mul_pd(_mm512_mul_pd(strike, discount), n_neg_d2), _mm512_mul_pd(spot, n_neg_d1));
+
+        __m512d call_delta = nd1;
+        __m512d put_delta = _mm512_sub_pd(nd1, one);
+        __m512d denom = _mm512_max_pd(_mm512_mul_pd(spot, sigma_sqrt_T), eps);
+        __m512d gamma = _mm512_div_pd(phi, denom);
+        __m512d vega = _mm512_mul_pd(_mm512_mul_pd(spot, phi), sqrt_T);
+        __m512d theta_first = _mm512_div_pd(_mm512_mul_pd(_mm512_mul_pd(spot, phi), _mm512_mul_pd(sigma, _mm512_set1_pd(-1.0))), _mm512_mul_pd(_mm512_set1_pd(2.0), _mm512_max_pd(sqrt_T, eps)));
+        __m512d theta_second = _mm512_mul_pd(_mm512_mul_pd(_mm512_mul_pd(r, strike), discount), nd2);
+        __m512d theta = _mm512_sub_pd(theta_first, theta_second);
+        __m512d rho_call = _mm512_mul_pd(_mm512_mul_pd(_mm512_mul_pd(strike, T), discount), nd2);
+        __m512d rho_put = _mm512_mul_pd(_mm512_set1_pd(-1.0), _mm512_mul_pd(_mm512_mul_pd(_mm512_mul_pd(strike, T), discount), n_neg_d2));
+
+        __m512d safe_sigma = _mm512_max_pd(sigma, eps);
+        __m512d inv_sigma = _mm512_div_pd(one, safe_sigma);
+        __m512d vanna = _mm512_mul_pd(phi, _mm512_sub_pd(sqrt_T, _mm512_mul_pd(d1, inv_sigma)));
+        __m512d vomma = _mm512_mul_pd(vega, _mm512_mul_pd(d1, _mm512_mul_pd(d2, inv_sigma)));
+
+        _mm512_storeu_pd(out.call_ptr + i, call_price);
+        _mm512_storeu_pd(out.put_ptr + i, put_price);
+        _mm512_storeu_pd(out.delta_ptr + i, call_delta);
+        _mm512_storeu_pd(out.put_delta_ptr + i, put_delta);
+        _mm512_storeu_pd(out.gamma_ptr + i, gamma);
+        _mm512_storeu_pd(out.vega_ptr + i, vega);
+        _mm512_storeu_pd(out.theta_ptr + i, theta);
+        _mm512_storeu_pd(out.rho_call_ptr + i, rho_call);
+        _mm512_storeu_pd(out.rho_put_ptr + i, rho_put);
+        _mm512_storeu_pd(out.vanna_ptr + i, vanna);
+        _mm512_storeu_pd(out.vomma_ptr + i, vomma);
+    }
+
+    if (i < batch.count) {
+        for (std::size_t j = i; j < batch.count; ++j) {
+            OptionParams params{};
+            params.spot_price = batch.spot_ptr[j];
+            params.strike_price = batch.strike_ptr[j];
+            params.time_to_expiry = batch.time_ptr[j];
+            params.risk_free_rate = batch.rate_ptr[j];
+            params.volatility = batch.vol_ptr[j];
+            PricingResult res = BlackScholes::calculate(params);
+            out.call_ptr[j] = res.call_price;
+            out.put_ptr[j] = res.put_price;
+            out.delta_ptr[j] = res.call_delta;
+            out.put_delta_ptr[j] = res.put_delta;
+            out.gamma_ptr[j] = res.gamma;
+            out.vega_ptr[j] = res.vega;
+            out.theta_ptr[j] = res.theta;
+            out.rho_call_ptr[j] = res.rho_call;
+            out.rho_put_ptr[j] = res.rho_put;
+            out.vanna_ptr[j] = res.vanna;
+            out.vomma_ptr[j] = res.vomma;
+        }
+    }
+}
+#endif
 
 
 double reference_cdf(double x){
@@ -190,42 +444,20 @@ void BlackScholes::gradient_descent(const std::vector<double>& x_values, CDF_pre
 }
 
 CDF_precompute BlackScholes::computeCoefficents(){
-    //gives approx for CDF using method from Abramowitz and Stegun
-    CDF_precompute CDF;
-    std::vector<double> x_values;
-
-    for (double x = -3.0; x < 3.0; x += 0.01){
-        x_values.push_back(x);
-    }
-    for (double x = -8.0; x < -3.0; x += 0.1) {
-        x_values.push_back(x);
-    }
-    for (double x = 3.0; x <= 8.0; x += 0.1) {
-        x_values.push_back(x);
-    }    
-
-    //init guesses close to the actual solutions
-    CDF.p = 0.2316419;
-    CDF.a1 = 0.31938153;
-    CDF.a2 = -0.356563782;
-    CDF.a3 = 1.781477937;
-    CDF.a4 = -1.821255978;
-    CDF.a5 = 1.330274429;
-
-    //gradient descent
-    gradient_descent(x_values, CDF);
-    
-    return CDF;// Added return statement to match double return type
+    return CDF_precompute{
+        0.2316419,
+        0.31938153,
+        -0.356563782,
+        1.781477937,
+        -1.821255978,
+        1.330274429
+    };
 }
 
 
 
 double BlackScholes::normalCDF(double x){
-    // Compute coefficients once and cache them
-    static const CDF_precompute coeffs = computeCoefficents();
-    
-    // Use your optimized approximation
-    return approx_CDF(x, coeffs);
+    return 0.5 * std::erfc(-x * M_SQRT1_2);
 }
 
 void BlackScholes::computeD1D2(const OptionParams& params, double& d1, double& d2) {
@@ -260,18 +492,32 @@ void BlackScholes::computeD1D2(const OptionParams& params, double& d1, double& d
     double r = params.risk_free_rate;
     double sigma = params.volatility;
     
-    // Ultra-fast lookups using pre-computed arrays (~1-2 CPU cycles each)
-    int days = FastMath::years_to_days(T);
-    double sqrt_T = FastMath::fast_sqrt_days(days);        // ~1-2 cycles vs ~20-50 for std::sqrt
-    double ln_S_over_K = FastMath::fast_log_ratio(S / K);  // ~1-2 cycles vs ~30-60 for std::log
-    
-    // Fast arithmetic operations
-    double sigma_sqrt_T = sigma * sqrt_T;
-    double half_sigma2_T = 0.5 * sigma * sigma * T;
-    double r_T = r * T;
-    
-    // Black-Scholes d1 and d2 formulas
-    d1 = (ln_S_over_K + r_T + half_sigma2_T) / sigma_sqrt_T;
+    const double safe_T = std::max(T, 0.0);
+    const double sqrt_T = std::sqrt(safe_T);
+    double ratio = S / K;
+    if (!(ratio > 0.0)) {
+        ratio = std::numeric_limits<double>::min();
+    }
+    const double ln_S_over_K = std::log(ratio);
+
+    const double sigma_sqrt_T = sigma * sqrt_T;
+    const double eps = 1e-8;
+    if (sigma_sqrt_T < eps) {
+        const double discount = std::exp(-r * safe_T);
+        const double intrinsic = S - K * discount;
+        if (intrinsic > 0.0) {
+            d1 = std::numeric_limits<double>::infinity();
+        } else {
+            d1 = -std::numeric_limits<double>::infinity();
+        }
+        d2 = d1;
+        return;
+    }
+    const double safe_sigma_sqrt_T = sigma_sqrt_T;
+    const double half_sigma2_T = 0.5 * sigma * sigma * safe_T;
+    const double r_T = r * safe_T;
+
+    d1 = (ln_S_over_K + r_T + half_sigma2_T) / safe_sigma_sqrt_T;
     d2 = d1 - sigma_sqrt_T;
 }
 
@@ -338,8 +584,7 @@ PricingResult BlackScholes::calculate(const OptionParams& params) {
     
     // Step 6: Calculate Greeks for risk management
     // Get optimized sqrt(T) from FastMath for Greeks calculations
-    int days = FastMath::years_to_days(T);
-    double sqrt_T = FastMath::fast_sqrt_days(days);
+    const double sqrt_T = std::sqrt(std::max(T, 0.0));
     double sigma_sqrt_T = sigma * sqrt_T;
     
     // Standard normal PDF at d1: phi(d1) = (1/sqrt(2*pi)) * exp(-d1^2/2)
@@ -550,7 +795,9 @@ void BlackScholes::calculate_batch(const OptionBatchView& batch, PricingBatchVie
         return;
     }
     KernelCaps caps = queryCaps();
-    bool can_vec = (batch.stride <= 1 && out.stride <= 1) && (caps.avx512 || caps.avx2);
+    bool has_avx512 = caps.avx512 && OFP_CAN_COMPILE_AVX512;
+    bool has_avx2 = caps.avx2 && OFP_CAN_COMPILE_AVX2;
+    bool can_vec = (batch.stride <= 1 && out.stride <= 1) && (has_avx512 || has_avx2);
     if (can_vec) {
         calculateSIMD(batch, out);
     } else {
@@ -586,8 +833,19 @@ void BlackScholes::calculateScalarBatch(const OptionBatchView& batch, PricingBat
 }
 
 void BlackScholes::calculateSIMD(const OptionBatchView& batch, PricingBatchView& out) {
-    // TODO: Implement AVX2/AVX-512 kernel. For now fallback to scalar path to
-    // maintain correctness while the vector math tables are finalized.
+    KernelCaps caps = queryCaps();
+#if OFP_CAN_COMPILE_AVX512
+    if (caps.avx512) {
+        calculateAVX512Batch(batch, out);
+        return;
+    }
+#endif
+#if OFP_CAN_COMPILE_AVX2
+    if (caps.avx2) {
+        calculateAVX2Batch(batch, out);
+        return;
+    }
+#endif
     calculateScalarBatch(batch, out);
 }
 

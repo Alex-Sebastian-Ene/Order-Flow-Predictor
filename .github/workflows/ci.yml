@@ -19,16 +19,20 @@ jobs:
         sudo apt-get install -y cmake build-essential
 
     - name: Configure CMake
-      run: cmake -B ${{github.workspace}}/build -S ${{github.workspace}}/src/cpp
+      run: cmake -S ${{github.workspace}} -B ${{github.workspace}}/build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DBUILD_TESTS=ON \
+        -DBUILD_BENCHMARKS=ON \
+        -DUSE_CONAN=OFF
 
     - name: Build
-      run: cmake --build ${{github.workspace}}/build
+      run: cmake --build ${{github.workspace}}/build --config Release
 
     - name: Run C++ tests
       working-directory: ${{github.workspace}}/build
       run: |
         if [ -f CTestTestfile.cmake ]; then
-          ctest -C ${{env.BUILD_TYPE}} --output-on-failure
+          ctest --output-on-failure
         else
           echo "No C++ tests found, skipping"
         fi
@@ -122,7 +126,33 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Run performance tests
+    - name: Install benchmark dependencies
       run: |
-        # Will be implemented once performance tests are added
-        echo "Performance tests will run here"
+        sudo apt-get update
+        sudo apt-get install -y cmake build-essential linux-tools-common linux-tools-generic
+
+    - name: Allow unprivileged perf events
+      run: |
+        sudo sysctl -w kernel.perf_event_paranoid=1
+        sudo sysctl -w kernel.kptr_restrict=0
+
+    - name: Configure benchmark build
+      run: cmake -S ${{github.workspace}} -B ${{github.workspace}}/build-perf \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DBUILD_BENCHMARKS=ON \
+        -DBUILD_TESTS=OFF \
+        -DUSE_CONAN=OFF
+
+    - name: Build benchmark
+      run: cmake --build ${{github.workspace}}/build-perf --target bs_benchmark --config Release
+
+    - name: Enforce latency and PMU budgets
+      run: |
+        python3 .github/scripts/benchmark_gate.py \
+          --build-dir ${{github.workspace}}/build-perf \
+          --batch 128 \
+          --samples 20000 \
+          --warmup 2000 \
+          --budget-mean-ns 900 \
+          --budget-p99-ns 1100 \
+          --require-pmu

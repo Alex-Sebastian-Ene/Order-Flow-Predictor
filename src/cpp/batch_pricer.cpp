@@ -8,7 +8,7 @@ namespace order_flow {
 namespace pricing {
 
 BatchPricingEngine::BatchPricingEngine(const Config& cfg)
-    : cfg_(cfg), inbound_(cfg.queue_depth), outbound_(cfg.queue_depth), running_(false) {}
+    : cfg_(cfg), inbound_(cfg.queue_depth, &cfg.pinning), outbound_(cfg.queue_depth, &cfg.pinning), running_(false) {}
 
 BatchPricingEngine::~BatchPricingEngine() {
     stop();
